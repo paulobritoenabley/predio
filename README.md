@@ -3,6 +3,8 @@
 Landing page em 3D para terceirização de serviços (segurança, limpeza, recepção), imobiliárias e construtoras.
 A página é um prédio visto de fora: o scroll desce a câmera andar por andar, e cada andar que você passa fica aceso.
 
+**No ar:** https://paulobritoenabley.github.io/predio/
+
 ## Como abrir
 A página usa módulos JavaScript, por isso precisa de um servidor local (abrir o arquivo direto no navegador não funciona).
 
