@@ -571,15 +571,39 @@ function waveSilhouette() {
 }
 
 // Saguão (térreo, pé-direito duplo)
+// Tela de vídeo: mostra um poster até o vídeo realmente tocar (o iOS não pinta vídeo que nunca tocou)
+const SCREENS = [];
+function videoScreen(src, poster, color) {
+  const video = document.createElement('video');
+  Object.assign(video, { src, muted: true, defaultMuted: true, loop: true, playsInline: true, preload: 'none', crossOrigin: 'anonymous' });
+  video.setAttribute('muted', ''); video.setAttribute('playsinline', ''); video.setAttribute('webkit-playsinline', '');
+  const pt = new THREE.TextureLoader().load(poster); pt.colorSpace = THREE.SRGBColorSpace;
+  const vt = new THREE.VideoTexture(video); vt.colorSpace = THREE.SRGBColorSpace;
+  const mat = new THREE.MeshBasicMaterial({ map: pt, toneMapped: false, color: new THREE.Color(color, color, color) });
+  video.addEventListener('playing', () => { if (mat.map !== vt) { mat.map = vt; mat.needsUpdate = true; } });
+  const sc = { video, mat, want: false, state: 'parado' };
+  ['playing', 'pause', 'waiting', 'stalled', 'error'].forEach(ev => video.addEventListener(ev, () => { sc.state = ev; }));
+  SCREENS.push(sc); return sc;
+}
+function wantPlay(sc, on) {
+  sc.want = on;
+  const v = sc.video;
+  if (on) {
+    if (v.preload === 'none') { v.preload = 'auto'; v.load(); }
+    if (v.paused) { const p = v.play(); if (p && p.catch) p.catch(() => { sc.state = 'bloqueado'; }); }
+  } else if (!v.paused) v.pause();
+}
+// Modo de Pouca Energia do iOS recusa o play() automático; um toque libera. Tenta de novo a cada gesto.
+for (const ev of ['touchend', 'pointerdown', 'click', 'scroll', 'keydown']) {
+  addEventListener(ev, () => { for (const sc of SCREENS) if (sc.want && sc.video.paused) wantPlay(sc, true); }, { passive: true });
+}
+
 let lobbyVideo = null;
 {
   const r = new THREE.Group(); tower.add(r); rooms.terreo = r;
   const wall = new THREE.Mesh(new THREE.PlaneGeometry(22, 7.5), new THREE.MeshStandardMaterial({ color: '#2A2B38', roughness: .6 })); wall.position.set(0, 4.1, .05); r.add(wall);
-  lobbyVideo = document.createElement('video');
-  Object.assign(lobbyVideo, { src: 'assets/historias.mp4', muted: true, loop: true, playsInline: true, preload: REDUCED ? 'metadata' : 'none', crossOrigin: 'anonymous' });
-  lobbyVideo.setAttribute('muted', ''); lobbyVideo.setAttribute('playsinline', '');
-  const vt = new THREE.VideoTexture(lobbyVideo); vt.colorSpace = THREE.SRGBColorSpace;
-  const led = new THREE.Mesh(new THREE.PlaneGeometry(11.2, 6.3), new THREE.MeshBasicMaterial({ map: vt, toneMapped: false, color: new THREE.Color(.9, .9, .9) })); led.position.set(3.4, 4.2, .12); r.add(led);
+  lobbyVideo = videoScreen('assets/historias.mp4', 'assets/historias.webp', .9);
+  const led = new THREE.Mesh(new THREE.PlaneGeometry(11.2, 6.3), lobbyVideo.mat); led.position.set(3.4, 4.2, .12); r.add(led);
   box(11.6, 6.7, .1, MAT.black, 3.4, 4.2, .07, r);
   box(6.5, 1.1, 1.4, MAT.stone, -5, .75, 5, r); box(6.7, .06, 1.6, MAT.bone, -5, 1.33, 5, r);
   box(6.3, .04, .04, new THREE.MeshBasicMaterial({ color: new THREE.Color(2.2, 1.5, .8), toneMapped: false }), -5, .25, 5.72, r);
@@ -614,11 +638,8 @@ let boardVideo = null;
   box(VW + .4, .3, .8, MAT.metalLight, 0, VY + VH / 2 + .35, .05, g);
   box(VW, .06, .08, new THREE.MeshBasicMaterial({ color: new THREE.Color(2.2, 1.9, 1.5), toneMapped: false }), 0, VY + VH / 2 + .15, .45, g);
   for (const x of [-6, 0, 6]) { box(.12, .12, 1.1, MAT.metal, x, VY + VH / 2 + .45, .6, g); box(.7, .3, .4, MAT.black, x, VY + VH / 2 + .4, 1.2, g); }
-  boardVideo = document.createElement('video');
-  Object.assign(boardVideo, { src: 'assets/clientes.mp4', muted: true, loop: true, playsInline: true, preload: REDUCED ? 'metadata' : 'none', crossOrigin: 'anonymous' });
-  boardVideo.setAttribute('muted', ''); boardVideo.setAttribute('playsinline', '');
-  const vt = new THREE.VideoTexture(boardVideo); vt.colorSpace = THREE.SRGBColorSpace;
-  const vid = new THREE.Mesh(new THREE.PlaneGeometry(VW, VH), new THREE.MeshBasicMaterial({ map: vt, toneMapped: false, color: new THREE.Color(.92, .92, .92) }));
+  boardVideo = videoScreen('assets/clientes.mp4', 'assets/clientes.webp', .92);
+  const vid = new THREE.Mesh(new THREE.PlaneGeometry(VW, VH), boardVideo.mat);
   vid.position.set(0, VY, .16); g.add(vid);
   addLight('#D8DEFF', -11, 6, 71, 18, 18);
   // área do formulário: canto inferior direito do vídeo (em coordenadas do mundo)
@@ -924,7 +945,7 @@ document.fonts?.ready?.then(() => layout(true));
 const pointer = { x: 0, y: 0, sx: 0, sy: 0 };
 if (!COARSE && !REDUCED) addEventListener('pointermove', e => { pointer.x = e.clientX / innerWidth * 2 - 1; pointer.y = e.clientY / innerHeight * 2 - 1; }, { passive: true });
 
-let tS = (scrollY / vh) || 0, lastT = tS, rmIndex = -1;
+let tS = (scrollY / vh) || 0, lastT = tS;
 const P = new THREE.Vector3(), Q = new THREE.Vector3(), tmp = new THREE.Vector3();
 const veil = document.getElementById('veil');
 const rnd = n => Math.round(n * 1000) / 1000;
@@ -936,6 +957,8 @@ function portraitAdjust(p, q, t) {
   const k = a < .9 ? 1.32 : 1.12;
   tmp.subVectors(p, q).multiplyScalar(k); p.copy(q).add(tmp); p.y = Math.max(p.y, 1.4);
   q.y -= a < .9 ? 1.1 : .4;
+  // no saguão, sobe a cena para o painel de vídeo ficar acima do texto
+  if (a < .9) q.y -= 2.2 * sstep((t - 9.3) / .3) * (1 - sstep((t - 10.45) / .3));
 }
 
 const LERP = COARSE ? .16 : .1;
@@ -959,28 +982,19 @@ function frame() {
   U.uTime.value += dt;
   const target = THREE.MathUtils.clamp(scrollY / vh || 0, 0, TOTAL);
 
-  if (REDUCED) {
-    // sem viagem: a câmera vai direto para o andar da janela de texto atual
-    let idx = 0; WAYPOINTS.forEach((w, i) => { if (target >= w.t - .6) idx = i; });
-    if (idx !== rmIndex) {
-      if (rmIndex !== -1) { veil.classList.remove('is-off'); setTimeout(() => veil.classList.add('is-off'), 160); }
-      rmIndex = idx;
-    }
-    tS = target;
-    camAt(WAYPOINTS[idx].rest, P, Q);
-  } else {
-    tS += (target - tS) * (1 - Math.pow(1 - LERP, dt * 60));
-    if (Math.abs(target - tS) < 1e-4) tS = target;
-    camAt(tS, P, Q);
-  }
-  portraitAdjust(P, Q, REDUCED ? WAYPOINTS[rmIndex].rest : tS);
+  // A câmera segue o scroll também com "reduzir movimento": é o próprio dedo que move a cena.
+  // Nesse modo saem só os movimentos automáticos (paralaxe, cintilação, guindaste, aceno, carga).
+  tS += (target - tS) * (1 - Math.pow(1 - LERP, dt * 60));
+  if (Math.abs(target - tS) < 1e-4) tS = target;
+  camAt(tS, P, Q);
+  portraitAdjust(P, Q, tS);
   pointer.sx += (pointer.x - pointer.sx) * .05; pointer.sy += (pointer.y - pointer.sy) * .05;
   tmp.subVectors(Q, P).normalize();
   const right = _right.crossVectors(tmp, camera.up).normalize();
   P.addScaledVector(right, pointer.sx * .7).addScaledVector(camera.up, -pointer.sy * .4);
   camera.position.copy(P); camera.lookAt(Q);
 
-  const t = REDUCED ? WAYPOINTS[rmIndex].rest : tS;
+  const t = tS;
   const now = U.uTime.value;
 
   // assinatura: andares acendem quando a câmera passa por eles, e ficam acesos
@@ -1038,18 +1052,12 @@ function frame() {
     FLY.position.y -= 1.0;
     FLY.rotation.set(0, Math.atan2(fwd.x, fwd.z) + .35 + Math.sin(fu * Math.PI) * .12, Math.sin(fu * 9) * .03);
   }
-  if (boardVideo) {
-    if (t > 10.1 && boardVideo.preload === 'none') { boardVideo.preload = 'auto'; boardVideo.load(); }
-    const nearB = t > 10.9;
-    if (nearB && boardVideo.paused && !REDUCED) boardVideo.play().catch(() => {});
-    if (!nearB && !boardVideo.paused) boardVideo.pause();
-  }
-  if (lobbyVideo) {
-    if (t > 7.9 && lobbyVideo.preload === 'none') { lobbyVideo.preload = 'auto'; lobbyVideo.load(); }
-    const near = t > 8.9 && t < 10.9;
-    if (near && lobbyVideo.paused && !REDUCED) lobbyVideo.play().catch(() => {});
-    if (!near && !lobbyVideo.paused) lobbyVideo.pause();
-  }
+  // vídeos: baixam um pouco antes, tocam só quando a cena está na tela
+  if (t > 10.1 && boardVideo.video.preload === 'none') { boardVideo.video.preload = 'auto'; boardVideo.video.load(); }
+  if (t > 7.9 && lobbyVideo.video.preload === 'none') { lobbyVideo.video.preload = 'auto'; lobbyVideo.video.load(); }
+  const wantB = t > 10.9, wantL = t > 8.9 && t < 10.9;
+  if (wantB !== boardVideo.want) wantPlay(boardVideo, wantB);
+  if (wantL !== lobbyVideo.want) wantPlay(lobbyVideo, wantL);
 
   updateCopy(t);
   updateLift(t, P.y, tS - lastT); lastT = tS;
@@ -1057,14 +1065,30 @@ function frame() {
   const settled = Math.abs(target - tS) < 1e-3;
   skip = MOBILE && settled && !skip;
   if (!skip) draw();
+  debugHud(rawDt);
+}
+
+const DEBUG = /[?&]debug/.test(location.search);
+let dbgEl = null, dbgN = 0, dbgAcc = 0;
+function debugHud(dt) {
+  if (!DEBUG) return;
+  if (!dbgEl) { dbgEl = document.createElement('pre'); dbgEl.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:99;margin:0;padding:8px 10px;font:11px/1.35 monospace;color:#0f0;background:rgba(0,0,0,.78);border-radius:6px;pointer-events:none;white-space:pre'; document.body.appendChild(dbgEl); }
+  dbgN++; dbgAcc += dt;
+  if (dbgAcc < .5) return;
+  const fps = Math.round(dbgN / dbgAcc); dbgN = 0; dbgAcc = 0;
+  dbgEl.textContent = [
+    'fps ' + fps + '  dpr ' + DPR.toFixed(2) + '  canvas ' + renderer.domElement.width + 'x' + renderer.domElement.height,
+    'reduzir movimento: ' + (REDUCED ? 'SIM' : 'não') + '  toque: ' + (COARSE ? 'sim' : 'não') + '  bloom: ' + (composer ? 'sim' : 'não'),
+    't ' + tS.toFixed(2) + ' / ' + TOTAL + '  draw calls ' + renderer.info.render.calls,
+    'vídeo saguão: ' + lobbyVideo.state + (lobbyVideo.video.paused ? ' (pausado)' : '') + '  placa: ' + boardVideo.state + (boardVideo.video.paused ? ' (pausado)' : ''),
+  ].join('\n');
 }
 
 function loadImage(src) { return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; }); }
 
 // estado inicial: tudo apagado, a cidade acesa
 applyFloorLights(1);
-if (REDUCED && lobbyVideo) lobbyVideo.addEventListener('loadeddata', () => { lobbyVideo.currentTime = 2; }, { once: true });
-if (REDUCED && boardVideo) boardVideo.addEventListener('loadeddata', () => { boardVideo.currentTime = 8.2; }, { once: true });
+
 async function warmUp() {
   const vis = Object.values(rooms).map(r => r.visible);
   Object.values(rooms).forEach(r => { r.visible = true; }); FLY.visible = true;
