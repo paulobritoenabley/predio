@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Enabley · Do topo ao térreo</title>
+<meta name="description" content="Treinamento, conhecimento e comunicação no celular de quem faz o prédio funcionar: segurança, limpeza, recepção, corretores e obra.">
+<meta name="theme-color" content="#0E1630">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect x=%229%22 y=%224%22 width=%2214%22 height=%2226%22 rx=%221%22 fill=%22%230E1630%22/%3E%3Crect x=%2212%22 y=%228%22 width=%228%22 height=%223%22 fill=%22%23FFC27A%22/%3E%3Crect x=%2212%22 y=%2214%22 width=%228%22 height=%223%22 fill=%22%23FFC27A%22/%3E%3Crect x=%2212%22 y=%2220%22 width=%228%22 height=%223%22 fill=%22%23A3159A%22/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Montserrat:ital,wght@0,600;0,700;0,800;0,900;1,700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/site.css">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<a class="skip" href="#agendar">Pular para o agendamento</a>
+
+<header class="bar">
+  <a class="bar__brand" href="#topo" aria-label="Enabley, voltar ao topo">
+    <img src="assets/enabley.webp" alt="Enabley" width="512" height="201">
+  </a>
+  <a class="btn btn--accent bar__cta" href="#agendar" data-goto="praca">Agendar demonstração</a>
+</header>
+
+<!-- Painel do elevador: mapa do prédio, clicável -->
+<nav class="lift" aria-label="Andares do prédio">
+  <div class="lift__display" aria-live="polite">
+    <span class="lift__arrow" aria-hidden="true"></span>
+    <span class="lift__num" id="liftNum">C</span>
+    <span class="lift__name" id="liftName">Cobertura</span>
+  </div>
+  <ol class="lift__floors">
+    <li><button type="button" data-goto="cobertura" aria-label="Cobertura"><b>C</b><span>Cobertura</span></button></li>
+    <li><button type="button" data-goto="recepcao" aria-label="18º andar, recepção"><b>18</b><span>Recepção</span></button></li>
+    <li><button type="button" data-goto="seguranca" aria-label="14º andar, segurança"><b>14</b><span>Segurança</span></button></li>
+    <li><button type="button" data-goto="limpeza" aria-label="10º andar, limpeza e facilities"><b>10</b><span>Limpeza</span></button></li>
+    <li><button type="button" data-goto="imobiliaria" aria-label="6º andar, imobiliária"><b>6</b><span>Imobiliária</span></button></li>
+    <li><button type="button" data-goto="obra" aria-label="3º andar, vista para a obra"><b>3</b><span>Obra</span></button></li>
+    <li><button type="button" data-goto="terreo" aria-label="Térreo"><b>T</b><span>Térreo</span></button></li>
+    <li><button type="button" data-goto="praca" aria-label="Entrada, agendar demonstração"><b>E</b><span>Entrada</span></button></li>
+  </ol>
+</nav>
+
+<div class="stage" aria-hidden="true">
+  <canvas id="world"></canvas>
+  <div class="veil" id="veil"></div>
+</div>
+
+<main class="copy" id="topo">
+  <div class="scrim scrim--lead" data-scrim="lead"></div>
+  <div class="scrim scrim--trail" data-scrim="trail"></div>
+  <div class="scrim scrim--center" data-scrim="center"></div>
+
+  <section class="blk blk--lead blk--hero" data-win="hero" aria-labelledby="h-hero">
+    <h1 id="h-hero">Quem mantém o prédio de pé não senta atrás de uma mesa.</h1>
+    <p class="lede">Treinamento, conhecimento e comunicação no celular de vigilantes, recepcionistas, equipes de limpeza, corretores e de obra.</p>
+    <a class="btn btn--accent" href="#agendar" data-goto="praca">Agendar demonstração</a>
+  </section>
+
+  <section class="blk blk--lead" data-win="1.62 2.6" aria-labelledby="h-rec">
+    <p class="floor"><b>18º</b> andar, recepção</p>
+    <h2 id="h-rec">Cada posto atende do mesmo jeito.</h2>
+    <p>A recepcionista nova recebe a trilha do cargo no primeiro dia, direto no celular e sem e-mail corporativo. O padrão de atendimento fica igual em todos os clientes que a sua empresa atende, e em 25 idiomas, se for preciso.</p>
+  </section>
+
+  <section class="blk blk--center blk--dark" data-win="3.2 3.78" aria-labelledby="h-blk">
+    <p class="floor"><b>14º</b> andar, segurança</p>
+    <h2 id="h-blk" class="quiet">Posto sem computador. Sem internet.<br>Gente nova toda semana.</h2>
+  </section>
+
+  <section class="blk blk--lead blk--case" data-win="3.86 5.0" aria-labelledby="h-case">
+    <p class="floor case__brand"><img class="case__logo" src="assets/logos/omega.webp" alt="Omega" width="480" height="235"> Case Omega 2011, segurança patrimonial</p>
+    <h2 id="h-case">Um tablet em cada posto.</h2>
+    <p class="case__lead">Tempo para um vigilante novo estar pronto:</p>
+    <p class="case__big"><s>5 meses</s> <span class="case__arrow" aria-hidden="true"></span> <strong>1 mês</strong></p>
+    <dl class="case__facts">
+      <div><dt>80%</dt><dd>menos custo com treinamento</dd></div>
+      <div><dt>+10%</dt><dd>de retenção dos novos colaboradores</dd></div>
+    </dl>
+    <p class="small">Mais de 30 anos protegendo embaixadas, prédios públicos, complexos industriais e shoppings, em mais de 10 países. Conteúdo baixado no tablet comunitário, que funciona offline.</p>
+  </section>
+
+  <section class="blk blk--trail" data-win="5.62 6.55" aria-labelledby="h-limp">
+    <p class="floor"><b>10º</b> andar, limpeza e facilities</p>
+    <h2 id="h-limp">O procedimento certo está na parede.</h2>
+    <p>Um QR code no ponto de uso abre o passo a passo: diluição do produto, sequência da limpeza, checklist do banheiro. A supervisão acompanha quem concluiu, por contrato e por unidade, e audita o campo pelo mesmo app.</p>
+  </section>
+
+  <section class="blk blk--lead" data-win="6.95 7.85" aria-labelledby="h-imob">
+    <p class="floor"><b>6º</b> andar, plantão imobiliário</p>
+    <h2 id="h-imob">Lançamento novo, todos os corretores no mesmo dia.</h2>
+    <p>Tabela, memorial descritivo e argumentos de venda chegam ao celular de cada corretor, com confirmação de leitura. Surgiu uma dúvida no plantão? O AI Companion responde só com o material oficial do empreendimento.</p>
+  </section>
+
+  <section class="blk blk--trail" data-win="8.28 9.12" aria-labelledby="h-obra">
+    <p class="floor"><b>3º</b> andar, vista para o terreno ao lado</p>
+    <h2 id="h-obra">Enquanto isso, outro prédio sobe.</h2>
+    <p>No canteiro, o treinamento de segurança vira trilha com assinatura eletrônica e recertificação automática. O engenheiro vê no painel quem está com a certificação em dia antes de liberar a frente de trabalho.</p>
+  </section>
+
+  <section class="blk blk--lead blk--lobby" data-win="9.55 10.45" aria-labelledby="h-lobby">
+    <p class="floor"><b>Térreo</b></p>
+    <h2 id="h-lobby">Mais de 1 milhão de pessoas já passaram por esta portaria.</h2>
+    <p>Desde 2006, em mais de 30 países e 25 idiomas, com certificação ISO 27001.</p>
+    <ul class="directory" aria-label="Empresas que treinam a linha de frente com a Enabley">
+      <li><img src="assets/logos/coca-cola.webp" alt="Coca-Cola" width="472" height="160" style="--ar:2.95"><span>79% menos custo com treinamentos</span></li>
+      <li><img src="assets/logos/novo-atacarejo.webp" alt="Novo Atacarejo" width="246" height="158" style="--ar:1.56"><span>Integração de 7 dias para 1</span></li>
+      <li><img src="assets/logos/vivo.webp" alt="Vivo" width="480" height="143" style="--ar:3.36"></li>
+      <li><img src="assets/logos/cejam.webp" alt="Cejam" width="480" height="132" style="--ar:3.64"></li>
+      <li><img src="assets/logos/supera-farma.webp" alt="Supera Farma" width="480" height="117" style="--ar:4.10"></li>
+      <li><img src="assets/logos/dpaschoal.webp" alt="DPaschoal" width="480" height="168" style="--ar:2.86"></li>
+      <li><img src="assets/logos/giraffas.webp" alt="Giraffas" width="412" height="98" style="--ar:4.20"></li>
+      <li><img src="assets/logos/chillibeans.webp" alt="Chilli Beans" width="428" height="44" style="--ar:9.73"></li>
+    </ul>
+  </section>
+
+  <section class="blk blk--lead blk--finale" data-win="finale" data-board id="agendar" aria-label="Agendar demonstração">
+    <form class="form" id="demoForm" novalidate>
+      <div class="form__row">
+        <label>Nome<input name="nome" autocomplete="name" required></label>
+        <label>E-mail de trabalho<input name="email" type="email" autocomplete="email" required></label>
+      </div>
+      <div class="form__row">
+        <label>Empresa<input name="empresa" autocomplete="organization" required></label>
+        <label>Setor
+          <select name="setor" required>
+            <option value="">Escolha</option>
+            <option>Terceirização de serviços</option>
+            <option>Imobiliária</option>
+            <option>Construtora ou incorporadora</option>
+            <option>Outro</option>
+          </select>
+        </label>
+      </div>
+      <button class="btn btn--accent btn--wide" type="submit">Agendar demonstração</button>
+      <p class="form__msg" id="formMsg" role="status"></p>
+    </form>
+  </section>
+</main>
+
+<div class="spacer" id="spacer" aria-hidden="true"></div>
+
+<noscript><p class="noscript">Esta página usa JavaScript para desenhar o prédio em 3D. O conteúdo está acima, em texto.</p></noscript>
+<script type="module" src="js/world.js"></script>
+</body>
+</html>
