@@ -40,7 +40,7 @@ html { scrollbar-color: #3A4570 var(--canvas); }
 .skip:focus { top: 12px; }
 
 /* ---------- Palco ---------- */
-.stage { position: fixed; inset: 0; z-index: 0; }
+.stage { position: fixed; top: 0; left: 0; right: 0; height: 100vh; height: 100lvh; z-index: 0; }
 #world { display: block; width: 100%; height: 100%; }
 .veil { position: absolute; inset: 0; background: var(--canvas); opacity: 1; transition: opacity .9s var(--ease-out); pointer-events: none; }
 .veil.is-off { opacity: 0; }

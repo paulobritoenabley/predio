@@ -7,10 +7,14 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import * as T from './textures.js';
 
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const COARSE = matchMedia('(pointer: coarse)').matches;
+// Celular: sem pós-processamento, menos pixels, menos luzes por shader.
+const MOBILE = COARSE || Math.min(innerWidth, innerHeight) < 700;
+const LIGHT_SLOTS = MOBILE ? 3 : 5;
 
 /* ======================================================================
    Trilha: posições em alturas de viewport (vh)
@@ -64,8 +68,9 @@ const KEYS = [
    Renderizador, cena, pós
    ====================================================================== */
 const canvas = document.getElementById('world');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-const DPR = Math.min(devicePixelRatio || 1, COARSE ? 1.5 : 1.75);
+// No desktop a cena passa pelo bloom (o antialias vem do alvo com MSAA); no celular desenha direto na tela.
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: MOBILE, powerPreference: 'high-performance' });
+let DPR = Math.min(devicePixelRatio || 1, MOBILE ? 1.3 : 1.75);
 renderer.setPixelRatio(DPR);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
@@ -76,11 +81,15 @@ const HORIZON = new THREE.Color('#5B4A78');
 scene.fog = new THREE.Fog(HORIZON, 160, 820);
 const camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.3, 3000);
 
-const composer = new EffectComposer(renderer);
-composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.42, 0.45, 0.9);
-composer.addPass(bloom);
-composer.addPass(new OutputPass());
+let composer = null, bloom = null;
+if (!MOBILE) {
+  composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, samples: 4 }));
+  composer.addPass(new RenderPass(scene, camera));
+  bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.42, 0.45, 0.9);
+  composer.addPass(bloom);
+  composer.addPass(new OutputPass());
+}
+const draw = () => composer ? composer.render() : renderer.render(scene, camera);
 
 const clock = new THREE.Clock();
 const U = { uTime: { value: 0 }, uDim: { value: 1 } };
@@ -109,7 +118,7 @@ function makeSky() {
   });
   return new THREE.Mesh(new THREE.SphereGeometry(1500, 48, 24), m);
 }
-const sky = makeSky(); sky.renderOrder = -10; scene.add(sky);
+const sky = makeSky(); sky.renderOrder = -10; sky.userData.keep = true; scene.add(sky);
 
 // Reflexo do céu no vidro
 const pmrem = new THREE.PMREMGenerator(renderer);
@@ -287,10 +296,13 @@ box(24, .5, 24, MAT.slab, 0, .25, 0);
 const glassFront = [];
 {
   const glassMat = (op) => new THREE.MeshStandardMaterial({ color: '#5A6CA8', metalness: 1, roughness: .04, envMap: ENV, envMapIntensity: 1.1, transparent: true, opacity: op, depthWrite: false });
+  const sharedGlass = glassMat(.5);
   for (let f = 0; f < FLOORS; f++) {
     if (f === 1) continue;
     const h = f === 0 ? FH * 2 : FH;
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(24, h), glassMat(.5));
+    const own = FEATURE[f] || f === 0;
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(24, h), own ? glassMat(.5) : sharedGlass);
+    if (own) m.userData.keep = true;
     m.position.set(0, f * FH + h / 2, HW); m.renderOrder = 5; tower.add(m); glassFront[f] = m;
   }
   for (const s of [-1, 1]) {
@@ -367,17 +379,33 @@ await document.fonts.load('500 20px Geist').catch(() => {});
 const beacons = [];
 function beacon(x, y, z) {
   const m = new THREE.Mesh(new THREE.SphereGeometry(.28, 12, 8), new THREE.MeshBasicMaterial({ color: '#FF2E2E', toneMapped: false }));
-  m.position.set(x, y, z); scene.add(m); beacons.push(m); return m;
+  m.position.set(x, y, z); m.userData.keep = true; scene.add(m); beacons.push(m); return m;
 }
 beacon(-HW, H + 1.6, HW); beacon(HW, H + 1.6, HW); beacon(-HW, H + 1.6, -HW); beacon(HW, H + 1.6, -HW);
 
 /* ======================================================================
    Andares em destaque
    ====================================================================== */
-const roomLights = {};
+// Cada luz da cena é só um descritor. A cada frame as mais relevantes para a câmera
+// ocupam um punhado fixo de PointLights, então todo shader calcula poucas luzes.
+const LIGHTS = [];
+const ROOM_FLOOR = { recepcao: 18, seguranca: 14, limpeza: 10, imobiliaria: 6, terreo: 0 };
+function addLight(color, x, y, z, intensity, dist = 20, decay = 1.4, key = null) {
+  const d = { color: new THREE.Color(color), pos: new THREE.Vector3(x, y, z), base: intensity, intensity: key ? 0 : intensity, dist, decay, key, score: 0 };
+  LIGHTS.push(d); return d;
+}
 function roomLight(key, color, x, y, z, intensity, dist = 20) {
-  const l = new THREE.PointLight(color, 0, dist, 1.4); l.position.set(x, y, z); tower.add(l);
-  (roomLights[key] ||= []).push({ l, base: intensity }); return l;
+  return addLight(color, x, ROOM_FLOOR[key] * FH + y, z, intensity, dist, 1.4, key);
+}
+const lightPool = Array.from({ length: LIGHT_SLOTS }, () => { const l = new THREE.PointLight('#fff', 0, 20, 1.4); scene.add(l); return l; });
+function assignLights(cam) {
+  for (const d of LIGHTS) d.score = d.intensity <= 0 ? 0 : d.intensity / (1 + d.pos.distanceToSquared(cam) / (d.dist * d.dist * 4));
+  const best = LIGHTS.filter(d => d.score > .05).sort((a, b) => b.score - a.score);
+  lightPool.forEach((l, i) => {
+    const d = best[i];
+    if (!d) { l.intensity = 0; return; }
+    l.position.copy(d.pos); l.color.copy(d.color); l.distance = d.dist; l.decay = d.decay; l.intensity = d.intensity;
+  });
 }
 function device(w, h, d, screenTex, parent, landscape = false) {
   const g = new THREE.Group();
@@ -445,7 +473,7 @@ const SEC = {};
   box(.3, 1.0, 1.6, MAT.metalLight, -7 + 3 * 2.2, .5, 8, r);
   // câmera de teto
   const dome = new THREE.Mesh(new THREE.SphereGeometry(.22, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), MAT.black); dome.rotation.x = Math.PI; dome.position.set(-2, 3.48, 6); r.add(dome);
-  SEC.rec = new THREE.Mesh(new THREE.SphereGeometry(.04, 8, 6), new THREE.MeshBasicMaterial({ color: new THREE.Color(3, .2, .2), toneMapped: false })); SEC.rec.position.set(-2, 3.28, 6.15); r.add(SEC.rec);
+  SEC.rec = new THREE.Mesh(new THREE.SphereGeometry(.04, 8, 6), new THREE.MeshBasicMaterial({ color: new THREE.Color(3, .2, .2), toneMapped: false })); SEC.rec.position.set(-2, 3.28, 6.15); SEC.rec.userData.keep = true; r.add(SEC.rec);
   // o tablet comunitário, em um totem
   box(.5, 1.5, .4, MAT.metalLight, 1.2, .75, 8.4, r);
   SEC.tablet = device(1.9, 1.24, .08, T.screenSeguranca(), r, true);
@@ -453,7 +481,7 @@ const SEC = {};
   SEC.tablet.userData.screen.material.color.setScalar(0.02);
   SEC.halo = new THREE.Mesh(new THREE.PlaneGeometry(5, 4), new THREE.MeshBasicMaterial({ map: T.poolTexture(), color: '#C23AB6', transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0 }));
   SEC.halo.position.set(1.2, 2.05, 8.5); r.add(SEC.halo);
-  SEC.tabletLight = new THREE.PointLight('#D25BCB', 0, 14, 1.3); SEC.tabletLight.position.set(1.2, 2.2, 9.6); r.add(SEC.tabletLight);
+  SEC.tabletLight = addLight('#D25BCB', 1.2, y + 2.2, 9.6, 0, 14, 1.3);
   plant(r, -9.4, 0, 3, 1);
   roomLight('seguranca', '#FFD3A0', 3, 3.1, 6, 34); roomLight('seguranca', '#C8D8FF', -5, 3.1, 6, 16);
 }
@@ -482,7 +510,7 @@ function waveSilhouette() {
   });
   const ag = new THREE.PlaneGeometry(.225, .9); ag.translate(0, .45 - .06, 0);
   const am = new THREE.Mesh(ag, mat(arm)); am.position.set(-.2, 1.37, .01); am.rotation.z = .5; g.add(am);
-  g.userData.arm = am;
+  g.userData.arm = am; am.userData.keep = true;
   return g;
 }
 
@@ -548,7 +576,7 @@ let lobbyVideo = null;
   const r = new THREE.Group(); tower.add(r); rooms.terreo = r;
   const wall = new THREE.Mesh(new THREE.PlaneGeometry(22, 7.5), new THREE.MeshStandardMaterial({ color: '#2A2B38', roughness: .6 })); wall.position.set(0, 4.1, .05); r.add(wall);
   lobbyVideo = document.createElement('video');
-  Object.assign(lobbyVideo, { src: 'assets/historias.mp4', muted: true, loop: true, playsInline: true, preload: REDUCED ? 'metadata' : 'auto', crossOrigin: 'anonymous' });
+  Object.assign(lobbyVideo, { src: 'assets/historias.mp4', muted: true, loop: true, playsInline: true, preload: REDUCED ? 'metadata' : 'none', crossOrigin: 'anonymous' });
   lobbyVideo.setAttribute('muted', ''); lobbyVideo.setAttribute('playsinline', '');
   const vt = new THREE.VideoTexture(lobbyVideo); vt.colorSpace = THREE.SRGBColorSpace;
   const led = new THREE.Mesh(new THREE.PlaneGeometry(11.2, 6.3), new THREE.MeshBasicMaterial({ map: vt, toneMapped: false, color: new THREE.Color(.9, .9, .9) })); led.position.set(3.4, 4.2, .12); r.add(led);
@@ -579,7 +607,7 @@ let lobbyVideo = null;
 const BOARD = {};
 let boardVideo = null;
 {
-  const g = new THREE.Group(); g.position.set(-11, 0, 66); scene.add(g); BOARD.g = g;
+  const g = new THREE.Group(); g.position.set(-11, 0, 66); g.userData.keep = true; scene.add(g); BOARD.g = g;
   const VW = 16, VH = 9, VY = 8.3;
   for (const x of [-4.5, 4.5]) { const p = new THREE.Mesh(new THREE.CylinderGeometry(.28, .34, 4.8, 16), MAT.metal); p.position.set(x, 2.4, -.25); g.add(p); }
   box(VW + .4, VH + .4, .5, MAT.metal, 0, VY, -.12, g);
@@ -587,18 +615,18 @@ let boardVideo = null;
   box(VW, .06, .08, new THREE.MeshBasicMaterial({ color: new THREE.Color(2.2, 1.9, 1.5), toneMapped: false }), 0, VY + VH / 2 + .15, .45, g);
   for (const x of [-6, 0, 6]) { box(.12, .12, 1.1, MAT.metal, x, VY + VH / 2 + .45, .6, g); box(.7, .3, .4, MAT.black, x, VY + VH / 2 + .4, 1.2, g); }
   boardVideo = document.createElement('video');
-  Object.assign(boardVideo, { src: 'assets/clientes.mp4', muted: true, loop: true, playsInline: true, preload: REDUCED ? 'metadata' : 'auto', crossOrigin: 'anonymous' });
+  Object.assign(boardVideo, { src: 'assets/clientes.mp4', muted: true, loop: true, playsInline: true, preload: REDUCED ? 'metadata' : 'none', crossOrigin: 'anonymous' });
   boardVideo.setAttribute('muted', ''); boardVideo.setAttribute('playsinline', '');
   const vt = new THREE.VideoTexture(boardVideo); vt.colorSpace = THREE.SRGBColorSpace;
   const vid = new THREE.Mesh(new THREE.PlaneGeometry(VW, VH), new THREE.MeshBasicMaterial({ map: vt, toneMapped: false, color: new THREE.Color(.92, .92, .92) }));
   vid.position.set(0, VY, .16); g.add(vid);
-  const spill = new THREE.PointLight('#D8DEFF', 18, 18, 1.4); spill.position.set(0, 6, 5); g.add(spill);
+  addLight('#D8DEFF', -11, 6, 71, 18, 18);
   // área do formulário: canto inferior direito do vídeo (em coordenadas do mundo)
   BOARD.x0 = -11 + 1.3; BOARD.x1 = -11 + 7.6; BOARD.y0 = VY - VH / 2 + .5; BOARD.z = 66.2;
 }
 
 // A carga que passa na frente da câmera entre a obra e o térreo
-const FLY = new THREE.Group(); FLY.visible = false; scene.add(FLY);
+const FLY = new THREE.Group(); FLY.visible = false; FLY.userData.keep = true; scene.add(FLY);
 {
   box(2.6, .18, 1.7, MAT.wood, 0, 0, 0, FLY);
   for (let i = 0; i < 3; i++) for (let j = 0; j < 2; j++) for (let k = 0; k < 2; k++) box(.82, .42, .78, MAT.concrete, -.86 + i * .86, .32 + k * .44, -.4 + j * .82, FLY);
@@ -615,8 +643,9 @@ const FLY = new THREE.Group(); FLY.visible = false; scene.add(FLY);
 
 // O terreno ao lado: outro prédio subindo
 const CRANE = {};
+let SITE = null;
 {
-  const site = new THREE.Group(); site.position.set(54, 0, -2); scene.add(site);
+  const site = new THREE.Group(); site.position.set(54, 0, -2); scene.add(site); SITE = site;
   const levels = 7;
   for (let l = 0; l <= levels; l++) {
     const partial = l >= levels - 1;
@@ -660,6 +689,7 @@ const CRANE = {};
   box(.6, 6, .6, MAT.crane, 0, 3.6, 0, jib);
   const cable = box(.04, 24, .04, MAT.black, -26, -12, 0, jib);
   const load = box(2.4, .8, 1.6, MAT.wood, -26, -24.4, 0, jib); CRANE.load = load; CRANE.cable = cable;
+  load.userData.keep = cable.userData.keep = true; jib.userData.keep = true;
   CRANE.top = beacon(0, 0, 0); jib.add(CRANE.top); CRANE.top.position.set(0, 6.8, 0);
   CRANE.tip = beacon(0, 0, 0); jib.add(CRANE.tip); CRANE.tip.position.set(-46, 1.3, 0);
   jib.rotation.y = .55;
@@ -668,15 +698,58 @@ const CRANE = {};
     box(.15, 2, .15, MAT.black, x, y - 1, z, site);
     const p = box(1.2, .7, .2, new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 3, 2.7), toneMapped: false }), x, y, z + .1, site); p.rotation.x = -.5;
   }
-  const fl1 = new THREE.PointLight('#E8F0FF', 120, 40, 1.4); fl1.position.set(-6, 14, 16); site.add(fl1);
-  const fl2 = new THREE.PointLight('#FFE7C0', 90, 40, 1.4); fl2.position.set(8, 22, 14); site.add(fl2);
+  addLight('#E8F0FF', 48, 14, 14, 120, 40); addLight('#FFE7C0', 62, 22, 12, 90, 40);
   // tablet da frente de trabalho, sobre o tripé
   const tp = new THREE.Group(); tp.position.set(-8.6, 3 * FH + .45, 9.2); site.add(tp);
   for (let i = 0; i < 3; i++) { const lg = new THREE.Mesh(new THREE.CylinderGeometry(.03, .03, 1.5, 6), MAT.black); const a = i * 2.1; lg.position.set(Math.sin(a) * .3, .7, Math.cos(a) * .3); lg.rotation.set(Math.cos(a) * .25, 0, -Math.sin(a) * .25); tp.add(lg); }
   const dv = device(1.7, 1.1, .1, T.screenObra(), tp, true); dv.position.set(0, 1.9, 0); dv.rotation.set(-.1, -1.1, 0);
   const capacete = new THREE.Mesh(new THREE.SphereGeometry(.24, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), MAT.yellow); capacete.position.set(1, .02, .4); tp.add(capacete);
-  const site_l = new THREE.PointLight('#FFE0B0', 30, 12, 1.4); site_l.position.set(-7, 3 * FH + 3, 11); site.add(site_l);
+  addLight('#FFE0B0', 47, 3 * FH + 3, 9, 30, 12);
 }
+
+/* ======================================================================
+   Desempenho: funde a geometria parada por material (menos draw calls)
+   ====================================================================== */
+const _inv = new THREE.Matrix4(), _rel = new THREE.Matrix4();
+function mergeStatic(root) {
+  root.updateMatrixWorld(true);
+  _inv.copy(root.matrixWorld).invert();
+  const buckets = new Map(), drop = [];
+  const walk = o => {
+    for (const c of [...o.children]) {
+      if (c.userData.keep) continue;
+      if (c.isMesh && !c.isInstancedMesh && !Array.isArray(c.material) && c.children.length === 0) {
+        const g = c.geometry.index ? c.geometry.toNonIndexed() : c.geometry.clone();
+        for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k);
+        if (!g.attributes.uv) continue;
+        g.clearGroups();
+        g.applyMatrix4(_rel.multiplyMatrices(_inv, c.matrixWorld));
+        const key = c.material.uuid + '|' + c.renderOrder;
+        if (!buckets.has(key)) buckets.set(key, { m: c.material, ro: c.renderOrder, list: [] });
+        buckets.get(key).list.push(g); drop.push(c);
+      } else if (!c.isLight) walk(c);
+    }
+  };
+  walk(root);
+  for (const c of drop) c.parent.remove(c);
+  for (const { m, ro, list } of buckets.values()) {
+    const merged = mergeGeometries(list, false); if (!merged) continue;
+    const mesh = new THREE.Mesh(merged, m); mesh.renderOrder = ro; root.add(mesh);
+  }
+}
+tower.name = 'torre'; SITE.name = 'obra'; BOARD.g.name = 'placa'; FLY.name = 'carga';
+for (const k in rooms) { mergeStatic(rooms[k]); rooms[k].userData.keep = true; }
+mergeStatic(CRANE.jib);
+SITE.userData.keep = true;
+
+mergeStatic(SITE);
+mergeStatic(FLY);
+mergeStatic(BOARD.g);
+mergeStatic(tower); tower.userData.keep = true;
+mergeStatic(scene);
+// matrizes fixas para tudo que não se mexe
+const MOVING = new Set([FLY, CRANE.jib, CRANE.cable, CRANE.load, WAVE.arm, ...lightPool]);
+scene.traverse(o => { if (!MOVING.has(o)) { o.updateMatrix(); o.matrixAutoUpdate = false; } });
 
 /* ======================================================================
    Câmera pelo scroll
@@ -711,6 +784,7 @@ const blocks = [...document.querySelectorAll('[data-win]')].map(el => {
   return { el, a, b, kind, anchor, op: -1 };
 });
 const scrims = Object.fromEntries([...document.querySelectorAll('[data-scrim]')].map(s => [s.dataset.scrim, s]));
+const scrimOp = {};
 const sstep = x => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
 const boardEl = document.querySelector('[data-board]');
 const _v = new THREE.Vector3();
@@ -719,11 +793,13 @@ const mulMM = (a, b) => { const c = []; for (let i = 0; i < 3; i++) for (let j =
 const mulMV = (m, v) => [m[0] * v[0] + m[1] * v[1] + m[2] * v[2], m[3] * v[0] + m[4] * v[1] + m[5] * v[2], m[6] * v[0] + m[7] * v[1] + m[8] * v[2]];
 const basis = p => { const m = [p[0], p[2], p[4], p[1], p[3], p[5], 1, 1, 1]; const v = mulMV(adj(m), [p[6], p[7], 1]); return mulMM(m, [v[0], 0, 0, 0, v[1], 0, 0, 0, v[2]]); };
 const BW = 480;
+let boardH = 0;
+addEventListener('resize', () => { boardH = 0; });
 function placeBoard(op) {
   const on = camera.aspect >= 1.1 && op > 0;
   boardEl.classList.toggle('is-board', on);
   if (!on) { boardEl.style.transform = ''; return false; }
-  const h = boardEl.offsetHeight || 300;
+  const h = boardH || (boardH = boardEl.offsetHeight) || 300;
   const yTop = BOARD.y0 + (BOARD.x1 - BOARD.x0) * h / BW;
   const corners = [[BOARD.x0, yTop], [BOARD.x1, yTop], [BOARD.x0, BOARD.y0], [BOARD.x1, BOARD.y0]];
   const dst = [];
@@ -751,11 +827,14 @@ function updateCopy(t) {
       B.el.classList.toggle('is-on', op > .5); B.op = op;
       if (op < .01) B.el.setAttribute('inert', ''); else B.el.removeAttribute('inert');
     }
-    B.el.style.setProperty('--dy', dy.toFixed(3) + 'vh');
+    if (op > .005) {
+      const q = Math.round(dy * 40) / 40;
+      if (q !== B.dy) { B.el.style.setProperty('--dy', q + 'vh'); B.dy = q; }
+    }
     if (B.kind === 'finale' && placeBoard(op)) continue;
     sc[B.anchor] = Math.max(sc[B.anchor], op);
   }
-  for (const k in scrims) scrims[k].style.opacity = sc[k];
+  for (const k in scrims) { const v = Math.round(sc[k] * 100) / 100; if (scrimOp[k] !== v) { scrims[k].style.opacity = v; scrimOp[k] = v; } }
 }
 
 /* ======================================================================
@@ -764,14 +843,14 @@ function updateCopy(t) {
 const liftNum = document.getElementById('liftNum'), liftName = document.getElementById('liftName');
 const liftArrow = document.querySelector('.lift__arrow');
 const railBtns = [...document.querySelectorAll('.lift__floors button')];
-let maxReached = 0, lastNum = '';
+let maxReached = 0, lastNum = '', lastCur = -1, lastLit = -1, lastUp = null;
 function updateLift(t, camY, vel) {
   maxReached = Math.max(maxReached, t);
-  let cur = 0; WAYPOINTS.forEach((w, i) => { if (t >= w.t - .35) cur = i; });
-  railBtns.forEach((b, i) => {
-    b.setAttribute('aria-current', String(i === cur));
-    b.classList.toggle('is-lit', maxReached >= WAYPOINTS[i].t - .35);
-  });
+  let cur = 0, lit = 0; WAYPOINTS.forEach((w, i) => { if (t >= w.t - .35) cur = i; if (maxReached >= w.t - .35) lit = i; });
+  if (cur !== lastCur || lit !== lastLit) {
+    railBtns.forEach((b, i) => { b.setAttribute('aria-current', String(i === cur)); b.classList.toggle('is-lit', i <= lit); });
+    lastCur = cur; lastLit = lit;
+  }
   let num;
   if (t > 10.7) num = 'E';
   else if (camY > H + 1) num = 'C';
@@ -780,7 +859,7 @@ function updateLift(t, camY, vel) {
   if (WAYPOINTS[cur].id === 'obra' && t > 8.05) num = '3';
   if (num !== lastNum) { liftNum.textContent = num; lastNum = num; }
   const nm = WAYPOINTS[cur].name; if (liftName.textContent !== nm) liftName.textContent = nm;
-  if (Math.abs(vel) > .0005) liftArrow.classList.toggle('is-up', vel < 0);
+  if (Math.abs(vel) > .0005 && (vel < 0) !== lastUp) { lastUp = vel < 0; liftArrow.classList.toggle('is-up', lastUp); }
 }
 function goTo(id) {
   const w = WAYPOINTS.find(x => x.id === id); if (!w) return;
@@ -820,15 +899,21 @@ document.getElementById('demoForm').addEventListener('submit', async e => {
    ====================================================================== */
 const spacer = document.getElementById('spacer');
 let vh = innerHeight || 800, vw = innerWidth || 1280;
+const stageEl = document.querySelector('.stage');
+let sw = 0, sh = 0;
 function layout(force) {
   const w = innerWidth || vw, h = innerHeight || vh;
-  if (!force && COARSE && w === vw && Math.abs(h - vh) < 140) { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); return; }
+  if (!force && COARSE && w === vw) return;                 // só a barra do navegador mudou
   vw = w; vh = h;
   spacer.style.height = Math.round((TOTAL + 1) * vh) + 'px';
-  renderer.setSize(w, h, false); composer.setSize(w, h);
-  bloom.setSize(w * .5, h * .5);
-  camera.aspect = w / h;
-  camera.fov = w / h < .9 ? 58 : w / h < 1.3 ? 46 : 38;
+  const W = stageEl.clientWidth || w, Hh = stageEl.clientHeight || h;
+  if (W !== sw || Hh !== sh || force) {
+    sw = W; sh = Hh;
+    renderer.setSize(W, Hh, false);
+    if (composer) { composer.setSize(W, Hh); bloom.setSize(W * .5, Hh * .5); }
+  }
+  camera.aspect = W / Hh;
+  camera.fov = camera.aspect < .9 ? 58 : camera.aspect < 1.3 ? 46 : 38;
   camera.updateProjectionMatrix();
 }
 addEventListener('resize', () => layout(false));
@@ -853,8 +938,24 @@ function portraitAdjust(p, q, t) {
   q.y -= a < .9 ? 1.1 : .4;
 }
 
+const LERP = COARSE ? .16 : .1;
+const _right = new THREE.Vector3(), _rt = new THREE.Vector3();
+const prevL = new Float32Array(FLOORS + 1).fill(-1); let prevG = -1;
+let skip = false, perfN = 0, perfSum = 0, downgrades = 0;
 function frame() {
-  const dt = Math.min(clock.getDelta(), .05);
+  requestAnimationFrame(frame);
+  const rawDt = clock.getDelta();
+  const dt = Math.min(rawDt, .05);
+  // regulador: se o aparelho não acompanha, reduz a resolução (até 3 vezes)
+  perfSum += rawDt; perfN++;
+  if (perfN === 90) {
+    if (perfSum / perfN > .03 && downgrades < 3 && DPR > .9) {
+      DPR = Math.max(.85, DPR - .2); renderer.setPixelRatio(DPR); renderer.setSize(sw, sh, false);
+      if (composer) { composer.setPixelRatio(DPR); composer.setSize(sw, sh); }
+      downgrades++;
+    }
+    perfN = 0; perfSum = 0;
+  }
   U.uTime.value += dt;
   const target = THREE.MathUtils.clamp(scrollY / vh || 0, 0, TOTAL);
 
@@ -868,14 +969,14 @@ function frame() {
     tS = target;
     camAt(WAYPOINTS[idx].rest, P, Q);
   } else {
-    tS += (target - tS) * (1 - Math.pow(1 - .1, dt * 60));
+    tS += (target - tS) * (1 - Math.pow(1 - LERP, dt * 60));
     if (Math.abs(target - tS) < 1e-4) tS = target;
     camAt(tS, P, Q);
   }
   portraitAdjust(P, Q, REDUCED ? WAYPOINTS[rmIndex].rest : tS);
   pointer.sx += (pointer.x - pointer.sx) * .05; pointer.sy += (pointer.y - pointer.sy) * .05;
   tmp.subVectors(Q, P).normalize();
-  const right = new THREE.Vector3().crossVectors(tmp, camera.up).normalize();
+  const right = _right.crossVectors(tmp, camera.up).normalize();
   P.addScaledVector(right, pointer.sx * .7).addScaledVector(camera.up, -pointer.sy * .4);
   camera.position.copy(P); camera.lookAt(Q);
 
@@ -900,20 +1001,19 @@ function frame() {
   const G = 1 - .82 * black;
   U.uDim.value = 1 - .7 * black;
   const L14 = L[14]; L[14] = L14 * (1 - black);
-  applyFloorLights(G);
+  let dirty = G !== prevG;
+  for (let f = 0; f < FLOORS && !dirty; f++) if (L[f] !== prevL[f]) dirty = true;
+  if (dirty) { applyFloorLights(G); prevL.set(L); prevG = G; }
   L[14] = L14;
   SEC.monitors.forEach(m => m.material.color.setScalar((1 - black) * .95 + .02));
   SEC.tablet.userData.screen.material.color.setScalar(.02 + 1.05 * tab);
   SEC.halo.material.opacity = .55 * tab * (1 - .55 * (1 - black));
   SEC.tabletLight.intensity = 26 * tab;
+  for (const d of LIGHTS) if (d.key) d.intensity = d.base * L[ROOM_FLOOR[d.key]] * (d.key === 'seguranca' ? (1 - black) : 1);
+  assignLights(P);
   SEC.rec.visible = (now % 1.4) < .7 && black < .5;
   hemi.intensity = .9 * (1 - .55 * black);
 
-  for (const key in roomLights) {
-    const f = { recepcao: 18, seguranca: 14, limpeza: 10, imobiliaria: 6, terreo: 0 }[key];
-    const mul = key === 'seguranca' ? (1 - black) : 1;
-    for (const { l, base } of roomLights[key]) l.intensity = base * L[f] * mul;
-  }
   // vidro mais aberto onde a câmera se aproxima
   for (const f in FEATURE) glassFront[f].material.opacity = .5 - .4 * Math.max(0, 1 - Math.abs(P.y - (+f * FH + 2)) / 6) * (P.z < 30 ? 1 : 0);
   glassFront[0].material.opacity = .5 - .4 * (P.y < 8 && P.z < 32 ? 1 : 0);
@@ -924,7 +1024,7 @@ function frame() {
   // vida no mundo
   for (const b of beacons) b.visible = (now + b.position.x * .01) % 2 < 1.1;
   if (!REDUCED) {
-    CRANE.jib.rotation.y = .55 + Math.sin(now * .12) * .18;
+    CRANE.jib.rotation.y = .55 + Math.sin(now * .12) * .18; CRANE.jib.updateMatrix();
     const drop = 24 + Math.sin(now * .35) * 3; CRANE.cable.scale.y = drop / 24; CRANE.cable.position.y = -drop / 2; CRANE.load.position.y = -drop - .4;
   }
   // aceno no 10º e a carga passando pela frente entre a obra e o térreo
@@ -933,17 +1033,19 @@ function frame() {
   FLY.visible = !REDUCED && fu > 0 && fu < 1;
   if (FLY.visible) {
     const fwd = tmp.subVectors(Q, camera.position).normalize();
-    const rt = new THREE.Vector3().crossVectors(fwd, camera.up).normalize();
+    const rt = _rt.crossVectors(fwd, camera.up).normalize();
     FLY.position.copy(camera.position).addScaledVector(fwd, 4.4).addScaledVector(rt, 7 - 14 * fu);
     FLY.position.y -= 1.0;
     FLY.rotation.set(0, Math.atan2(fwd.x, fwd.z) + .35 + Math.sin(fu * Math.PI) * .12, Math.sin(fu * 9) * .03);
   }
   if (boardVideo) {
+    if (t > 10.1 && boardVideo.preload === 'none') { boardVideo.preload = 'auto'; boardVideo.load(); }
     const nearB = t > 10.9;
     if (nearB && boardVideo.paused && !REDUCED) boardVideo.play().catch(() => {});
     if (!nearB && !boardVideo.paused) boardVideo.pause();
   }
   if (lobbyVideo) {
+    if (t > 7.9 && lobbyVideo.preload === 'none') { lobbyVideo.preload = 'auto'; lobbyVideo.load(); }
     const near = t > 8.9 && t < 10.9;
     if (near && lobbyVideo.paused && !REDUCED) lobbyVideo.play().catch(() => {});
     if (!near && !lobbyVideo.paused) lobbyVideo.pause();
@@ -951,8 +1053,10 @@ function frame() {
 
   updateCopy(t);
   updateLift(t, P.y, tS - lastT); lastT = tS;
-  composer.render();
-  requestAnimationFrame(frame);
+  // celular parado: desenha a 30 fps para não esquentar (o que esquenta, trava)
+  const settled = Math.abs(target - tS) < 1e-3;
+  skip = MOBILE && settled && !skip;
+  if (!skip) draw();
 }
 
 function loadImage(src) { return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; }); }
@@ -961,5 +1065,13 @@ function loadImage(src) { return new Promise((res, rej) => { const i = new Image
 applyFloorLights(1);
 if (REDUCED && lobbyVideo) lobbyVideo.addEventListener('loadeddata', () => { lobbyVideo.currentTime = 2; }, { once: true });
 if (REDUCED && boardVideo) boardVideo.addEventListener('loadeddata', () => { boardVideo.currentTime = 8.2; }, { once: true });
-requestAnimationFrame(() => { frame(); setTimeout(() => veil.classList.add('is-off'), 120); });
+async function warmUp() {
+  const vis = Object.values(rooms).map(r => r.visible);
+  Object.values(rooms).forEach(r => { r.visible = true; }); FLY.visible = true;
+  try { if (renderer.compileAsync) await renderer.compileAsync(scene, camera); else renderer.compile(scene, camera); } catch { renderer.compile(scene, camera); }
+  const seen = new Set();
+  scene.traverse(o => { const m = o.material; if (!m) return; for (const k of ['map', 'alphaMap', 'envMap']) { const t = m[k]; if (t && !t.isVideoTexture && !seen.has(t)) { seen.add(t); renderer.initTexture(t); } } });
+  Object.values(rooms).forEach((r, i) => { r.visible = vis[i]; }); FLY.visible = false;
+}
+warmUp().finally(() => requestAnimationFrame(() => { frame(); setTimeout(() => veil.classList.add('is-off'), 120); }));
 window.__scene = { scene, camera, renderer, L, get t() { return tS; } };
